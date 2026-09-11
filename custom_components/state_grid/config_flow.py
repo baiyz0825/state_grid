@@ -63,6 +63,12 @@ class StateGridOnnxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                     result = await dc.password_login(phone, password, encode=False, retry=3)
 
+                    # 如果返回值不是字典，避免后续以字典方式索引导致 TypeError
+                    if not isinstance(result, dict):
+                        LOGGER.error("密码登录返回了非字典类型: %s => %s", type(result), result)
+                        errors["base"] = "cannot_connect"
+                        result = {"errcode": 1, "errmsg": str(result)}
+
                     # 如果手机号登录遇RK001流控，且配置了备用邮箱，自动降级到邮箱登录
                     if result.get("errcode") != 0 and email and (
                         result.get("rk001") or
@@ -74,6 +80,10 @@ class StateGridOnnxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             # 邮箱降级：直接用 password_login(email, ...)
                             # （原代码调用的 _login_with_email_fallback 方法不存在，是隐藏 bug）
                             result = await dc.password_login(email, password, encode=False, retry=2)
+                            if not isinstance(result, dict):
+                                LOGGER.error("邮箱降级登录返回了非字典类型: %s => %s", type(result), result)
+                                errors["base"] = "cannot_connect"
+                                result = {"errcode": 1, "errmsg": str(result)}
                         except Exception as fallback_exc:
                             LOGGER.exception("[配置流程] 邮箱降级登录异常: %s", fallback_exc)
                             result = {"errcode": 1, "errmsg": f"邮箱降级登录异常: {fallback_exc}"}
@@ -236,6 +246,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                             result = await data_client.password_login(
                                 phone, new_password, encode=False, retry=3
                             )
+
+                            # 如果返回值不是字典，避免后续以字典方式索引导致 TypeError
+                            if not isinstance(result, dict):
+                                LOGGER.error("密码登录返回了非字典类型: %s => %s", type(result), result)
+                                errors["new_password"] = "cannot_connect"
+                                result = {"errcode": 1, "errmsg": str(result)}
+
                             # 手机号遇 RK001 流控，且配置了邮箱，自动降级验证
                             if result.get("errcode") != 0 and email and (
                                 result.get("rk001")
@@ -247,6 +264,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                                     result = await data_client.password_login(
                                         email, new_password, encode=False, retry=2
                                     )
+                                    if not isinstance(result, dict):
+                                        LOGGER.error("邮箱降级验证返回了非字典类型: %s => %s", type(result), result)
+                                        errors["new_password"] = "cannot_connect"
+                                        result = {"errcode": 1, "errmsg": str(result)}
                                 except Exception as fallback_exc:
                                     LOGGER.exception("[修改密码] 邮箱降级验证异常: %s", fallback_exc)
                                     result = {"errcode": 1, "errmsg": f"邮箱降级验证异常: {fallback_exc}"}
