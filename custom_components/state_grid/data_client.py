@@ -26,6 +26,25 @@ from .utils.logger import LOGGER
 from .utils.store import async_save_to_store
 from .utils.crypt import a, b, c, d, e
 
+
+def _enc_field(val, key):
+    """用本机 SM4 密钥加密敏感字段；key 缺失或值为空时原样返回（向后兼容）。"""
+    if val and key:
+        return "enc:" + a(val, key)
+    return val
+
+
+def _dec_field(val, key):
+    """解密敏感字段；旧版明文（无 'enc:' 前缀）原样返回，解密失败返回空串。"""
+    if isinstance(val, str) and val.startswith("enc:"):
+        try:
+            return b(val[4:], key) if key else ""
+        except Exception as _err:
+            LOGGER.warning("敏感字段解密失败，已清空: %s", _err)
+            return ""
+    return val
+
+
 from PIL import Image
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -312,12 +331,14 @@ class StateGridDataClient:
                 if B is not _D:
                         try:
                                 A.keyCode=B[_A9];A.publicKey=B[_AR];A.accessToken=B[_Ak];A.refreshToken=B[_Al];A.token=B[_AA];A.userInfo=B[_AS];A.powerUserList=B[_AT];A.doorAccountDict=B.get(_Am,{});A.is_debug=B['is_debug'];A.dataVersion=B[_An];A.account=B[_j];A.refresh_interval=B[_Ao]
-                                # 密码落盘解密（向后兼容：旧版明文密码无 "enc:" 前缀，原样使用）
+                                # 敏感字段落盘解密（向后兼容：旧版明文无 "enc:" 前缀，原样使用）
                                 _pw=B.get(_AF,'')
                                 if isinstance(_pw,str) and _pw.startswith('enc:'):
                                         try:A.password=b(_pw[4:],A.crypto_key) if A.crypto_key else ''
                                         except Exception as _dec_err:LOGGER.warning('密码解密失败，已清空: %s',_dec_err);A.password=''
                                 else:A.password=_pw
+                                A.llm_api_key=_dec_field(B.get('llm_api_key',''),A.crypto_key)
+                                A.email_account=_dec_field(B.get('email_account',''),A.crypto_key)
                                 if A.refresh_interval<12:A.refresh_interval=12
                                 # 增强字段
                                 A.llm_api_key=B.get('llm_api_key','')
@@ -342,11 +363,11 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         async def save_data(B):
                 A={};A[_A9]=B.keyCode;A[_AR]=B.publicKey;A[_Ak]=B.accessToken;A[_Al]=B.refreshToken;A[_AA]=B.token;A[_AS]=B.userInfo;A[_AT]=B.powerUserList;A[_Am]=B.doorAccountDict;A['is_debug']=B.is_debug;A[_An]=VERSION;A[_j]=B.account;A[_Ao]=B.refresh_interval
-                # 密码落盘加密：用本机 SM4 密钥加密，明文不再写入 .storage
-                A[_AF]=('enc:'+a(B.password,B.crypto_key)) if (B.password and B.crypto_key) else B.password
+                # 敏感字段落盘加密：用本机 SM4 密钥加密，明文不再写入 .storage
+                A[_AF]=_enc_field(B.password,B.crypto_key)
                 # 增强字段
-                A['llm_api_key']=B.llm_api_key;A['llm_base_url']=B.llm_base_url;A['llm_model']=B.llm_model
-                A['email_account']=B.email_account;                A['_rk001_cooldown_until']=B._rk001_cooldown_until
+                A['llm_api_key']=_enc_field(B.llm_api_key,B.crypto_key);A['llm_base_url']=B.llm_base_url;A['llm_model']=B.llm_model
+                A['email_account']=_enc_field(B.email_account,B.crypto_key);                A['_rk001_cooldown_until']=B._rk001_cooldown_until
                 A['_login_fail_cooldown_until']=B._login_fail_cooldown_until
                 A['_last_status']=B.last_status
                 # 保存 timestamp，使重启后 12 小时间隔判断仍然正确
