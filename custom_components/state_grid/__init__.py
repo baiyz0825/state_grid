@@ -3,7 +3,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.const import Platform
 from .const import DOMAIN
 from .utils.logger import LOGGER
-from .utils.store import async_load_from_store
+from .utils.store import async_load_from_store, async_load_crypto_key
 from .data_client import StateGridDataClient
 from . import click_captcha_solver
 from .config_flow import StateGridOnnxConfigFlow
@@ -14,7 +14,8 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """当用户在 UI 里点击"添加集成"并完成配置时调用。"""
     config = await async_load_from_store(hass, "state_grid.config") or None
-    data_client = StateGridDataClient(hass=hass, config=config)
+    crypto_key = await async_load_crypto_key(hass)
+    data_client = StateGridDataClient(hass=hass, config=config, crypto_key=crypto_key)
 
     # 配置优先级：entry.options > entry.data > 存储中的 config
     # entry.options 是用户在"配置"按钮中修改的最新值

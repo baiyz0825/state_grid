@@ -307,11 +307,17 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         # __init__: bilezhou 原版 + 增强字段加载
         # ────────────────────────────────────────────
-        def __init__(A,hass,config=_D):
-                B=config;A.hass=hass
+        def __init__(A,hass,config=_D,crypto_key=None):
+                B=config;A.hass=hass;A.crypto_key=crypto_key
                 if B is not _D:
                         try:
-                                A.keyCode=B[_A9];A.publicKey=B[_AR];A.accessToken=B[_Ak];A.refreshToken=B[_Al];A.token=B[_AA];A.userInfo=B[_AS];A.powerUserList=B[_AT];A.doorAccountDict=B.get(_Am,{});A.is_debug=B['is_debug'];A.dataVersion=B[_An];A.account=B[_j];A.password=B[_AF];A.refresh_interval=B[_Ao]
+                                A.keyCode=B[_A9];A.publicKey=B[_AR];A.accessToken=B[_Ak];A.refreshToken=B[_Al];A.token=B[_AA];A.userInfo=B[_AS];A.powerUserList=B[_AT];A.doorAccountDict=B.get(_Am,{});A.is_debug=B['is_debug'];A.dataVersion=B[_An];A.account=B[_j];A.refresh_interval=B[_Ao]
+                                # 密码落盘解密（向后兼容：旧版明文密码无 "enc:" 前缀，原样使用）
+                                _pw=B.get(_AF,'')
+                                if isinstance(_pw,str) and _pw.startswith('enc:'):
+                                        try:A.password=b(_pw[4:],A.crypto_key) if A.crypto_key else ''
+                                        except Exception as _dec_err:LOGGER.warning('密码解密失败，已清空: %s',_dec_err);A.password=''
+                                else:A.password=_pw
                                 if A.refresh_interval<12:A.refresh_interval=12
                                 # 增强字段
                                 A.llm_api_key=B.get('llm_api_key','')
@@ -335,7 +341,9 @@ class StateGridDataClient:
         # save_data: bilezhou 原版 + 增强字段保存
         # ────────────────────────────────────────────
         async def save_data(B):
-                A={};A[_A9]=B.keyCode;A[_AR]=B.publicKey;A[_Ak]=B.accessToken;A[_Al]=B.refreshToken;A[_AA]=B.token;A[_AS]=B.userInfo;A[_AT]=B.powerUserList;A[_Am]=B.doorAccountDict;A['is_debug']=B.is_debug;A[_An]=VERSION;A[_j]=B.account;A[_AF]=B.password;A[_Ao]=B.refresh_interval
+                A={};A[_A9]=B.keyCode;A[_AR]=B.publicKey;A[_Ak]=B.accessToken;A[_Al]=B.refreshToken;A[_AA]=B.token;A[_AS]=B.userInfo;A[_AT]=B.powerUserList;A[_Am]=B.doorAccountDict;A['is_debug']=B.is_debug;A[_An]=VERSION;A[_j]=B.account;A[_Ao]=B.refresh_interval
+                # 密码落盘加密：用本机 SM4 密钥加密，明文不再写入 .storage
+                A[_AF]=('enc:'+a(B.password,B.crypto_key)) if (B.password and B.crypto_key) else B.password
                 # 增强字段
                 A['llm_api_key']=B.llm_api_key;A['llm_base_url']=B.llm_base_url;A['llm_model']=B.llm_model
                 A['email_account']=B.email_account;                A['_rk001_cooldown_until']=B._rk001_cooldown_until

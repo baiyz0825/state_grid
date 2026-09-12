@@ -1,9 +1,15 @@
+import secrets
+
 from homeassistant.helpers.json import JSONEncoder
 from homeassistant.helpers.storage import Store
 from homeassistant.util import json as json_util
 from ..const import VERSION_STORAGE
 from .logger import LOGGER
 _LOGGER = LOGGER
+
+# 独立存放「密码加密密钥」的 store key。
+# 与 state_grid.config 分开，避免用户误把 config 文件贴到群里/issue 时泄露密钥。
+CRYPTO_KEY_STORE = "state_grid.secret"
 
 
 class StateGridStore(Store):
@@ -80,3 +86,19 @@ async def async_remove_store(hass, key):
     if "/" not in key:
         return
     await get_store_for_key(hass, key).async_remove()
+
+
+async def async_load_crypto_key(hass) -> str:
+    """返回本机唯一的 16 字节 SM4 密钥（hex 字符串）。
+
+    密钥只生成一次，持久化在独立的 `state_grid.secret` 存储文件中，
+    与存放用电数据的 `state_grid.config` 物理隔离。这样即便用户把
+    config 文件贴到论坛/issue 排错，也不会泄露可解密的密码密钥。
+    """
+    data = await async_load_from_store(hass, CRYPTO_KEY_STORE)
+    key = data.get("key") if isinstance(data, dict) else None
+    if not key or not isinstance(key, str) or len(key) < 16:
+        key = secrets.token_hex(16)  # 32 hex 字符 = 16 字节，满足 SM4 密钥长度
+        await async_save_to_store(hass, CRYPTO_KEY_STORE, {"key": key})
+        _LOGGER.info("已生成本机密码加密密钥 (state_grid.secret)")
+    return key

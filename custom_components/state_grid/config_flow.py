@@ -5,6 +5,7 @@ from homeassistant.helpers.selector import selector
 from .const import DOMAIN, LLM_BASE_URL, LLM_MODEL
 from .utils.logger import LOGGER
 from .data_client import StateGridDataClient
+from .utils.store import async_load_crypto_key
 from . import click_captcha_solver
 
 
@@ -66,6 +67,7 @@ class StateGridOnnxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 dc = StateGridDataClient(hass=self.hass, config=None)
+                dc.crypto_key = await async_load_crypto_key(self.hass)
                 dc.llm_api_key = llm_api_key
                 dc.llm_base_url = llm_base_url
                 dc.llm_model = llm_model
