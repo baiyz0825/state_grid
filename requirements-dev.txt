@@ -1,0 +1,8 @@
+# 本地联调/测试依赖（不参与 Home Assistant 运行时安装）
+# 用法:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/python tests/live_check.py --help
+aiohttp>=3.9
+pillow>=10.0
+openai>=1.30

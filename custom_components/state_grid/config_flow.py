@@ -8,6 +8,23 @@ from .data_client import StateGridDataClient
 from . import click_captcha_solver
 
 
+def _error_key_for_message(errmsg: str) -> str:
+    """把国网返回的错误信息映射成前端展示用的错误 key。
+
+    - 网站升级维护 / 风控(WAF)拦截 都不是账号问题，单独给出提示；
+    - RK001 为密码登录日额度流控；
+    - 其余按账号或密码错误处理。
+    """
+    text = errmsg or ""
+    if "MAINTENANCE" in text or "维护" in text or "升级" in text:
+        return "service_maintenance"
+    if "WAF_BLOCKED" in text or "风控" in text or "阻断" in text:
+        return "waf_blocked"
+    if "RK001" in text or "流控" in text or "日额度" in text:
+        return "rk001_rate_limit"
+    return "invalid_auth"
+
+
 class StateGridOnnxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """国家电网集成的配置向导（手机号+邮箱降级登录）。"""
 
@@ -89,7 +106,8 @@ class StateGridOnnxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             result = {"errcode": 1, "errmsg": f"邮箱降级登录异常: {fallback_exc}"}
 
                 except Exception as exc:
-                    LOGGER.error("国家电网登录异常: %s", exc)
+                    # 保留堆栈，便于定位（此前只打印 str(exc)，看不到具体是哪一层索引失败）
+                    LOGGER.exception("国家电网登录异常: %s: %s", type(exc).__name__, exc)
                     errors["base"] = "cannot_connect"
                 else:
                     if result.get("errcode") == 0:
@@ -115,10 +133,7 @@ class StateGridOnnxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             or "登录失败，请检查账号密码或LLM配置"
                         )
                         LOGGER.warning("国家电网登录失败: %s", errmsg)
-                        if "RK001" in errmsg or "流控" in errmsg or "日额度" in errmsg:
-                            errors["base"] = "rk001_rate_limit"
-                        else:
-                            errors["base"] = "invalid_auth"
+                        errors["base"] = _error_key_for_message(errmsg)
 
         data_schema = vol.Schema(
             {
@@ -272,7 +287,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                                     LOGGER.exception("[修改密码] 邮箱降级验证异常: %s", fallback_exc)
                                     result = {"errcode": 1, "errmsg": f"邮箱降级验证异常: {fallback_exc}"}
                         except Exception as exc:
-                            LOGGER.error("[修改密码] 验证异常: %s", exc)
+                            LOGGER.exception("[修改密码] 验证异常: %s: %s", type(exc).__name__, exc)
                             errors["new_password"] = "cannot_connect"
                             result = {"errcode": 1, "errmsg": str(exc)}
 
@@ -290,10 +305,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                                     or "新密码验证失败"
                                 )
                                 LOGGER.warning("[修改密码] 新密码验证失败: %s", errmsg)
-                                if "RK001" in errmsg or "流控" in errmsg or "日额度" in errmsg:
-                                    errors["new_password"] = "rk001_rate_limit"
-                                else:
-                                    errors["new_password"] = "invalid_auth"
+                                errors["new_password"] = _error_key_for_message(errmsg)
 
             if not errors:
                 # 实时更新运行中的 data_client

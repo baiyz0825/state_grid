@@ -5,3 +5,5 @@ __pycache__/
 *.swp
 *.swo
 *~
+.venv
+.local_store.json

@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "State Grid - Account login",
+        "description": "Sign in with your phone number. On rate limiting it falls back to email login.\n\n{fallback_hint}",
+        "data": {
+          "phone": "Phone number",
+          "email": "Backup email (for rate-limit fallback)",
+          "password": "Password",
+          "llm_api_key": "LLM API Key",
+          "llm_base_url": "LLM Base URL",
+          "llm_model": "LLM model ID"
+        },
+        "data_description": {
+          "llm_model": "Model ID used for captcha recognition, e.g. doubao-seed-2-0-pro-260215 (required)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Wrong account or password, or captcha recognition failed",
+      "cannot_connect": "Cannot reach the State Grid server",
+      "missing_llm_key": "Please provide the LLM API Key (used for captcha recognition)",
+      "missing_llm_model": "Please provide the LLM model ID (used for captcha recognition)",
+      "invalid_email": "Please enter a valid email address",
+      "invalid_phone": "Please enter a valid phone number",
+      "rk001_rate_limit": "Daily password-login quota exhausted (RK001); please retry after 00:00",
+      "service_maintenance": "The 95598 website is under maintenance and temporarily unavailable; please try again later",
+      "waf_blocked": "The request was blocked (HTTP 403/405): the website may be under maintenance or blocked by WAF; please try again later"
+    },
+    "abort": {
+      "single_instance_allowed": "A State Grid integration already exists; delete it before adding a new one"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "State Grid - Options",
+        "description": "Update LLM settings, backup email and refresh interval (leave blank to keep current values). To change the State Grid password, fill in the \"New password\" field; it will be verified on submit.",
+        "data": {
+          "llm_api_key": "LLM API Key (blank = keep current)",
+          "llm_base_url": "LLM Base URL",
+          "llm_model": "LLM model ID",
+          "email_account": "Backup email (for rate-limit fallback)",
+          "refresh_interval": "Refresh interval (hours, 12-48)",
+          "new_password": "New password (blank = keep current; verified on submit)"
+        },
+        "data_description": {
+          "llm_model": "Model ID used for captcha recognition, e.g. doubao-seed-2-0-pro-260215 (required)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "New password verification failed; please check the password",
+      "cannot_connect": "Cannot reach the State Grid server",
+      "no_account": "No running integration instance found; retry or restart Home Assistant",
+      "missing_llm_model": "Please provide the LLM model ID (used for captcha recognition)",
+      "rk001_cooldown_cannot_verify": "Currently in RK001 rate-limit cooldown; cannot verify the new password, please retry after 00:00",
+      "rk001_rate_limit": "Daily password-login quota exhausted (RK001); please retry after 00:00",
+      "service_maintenance": "The 95598 website is under maintenance and temporarily unavailable; please try again later",
+      "waf_blocked": "The request was blocked (HTTP 403/405): the website may be under maintenance or blocked by WAF; please try again later"
+    }
+  }
+}

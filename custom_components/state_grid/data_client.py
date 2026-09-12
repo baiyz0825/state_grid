@@ -232,8 +232,38 @@ def find_max_rectangle(matrix):
                         B.append(A)
         return H
 
+# ─── 非 JSON 响应分类（网站维护公告 / 风控拦截 / 其他） ───
+API_ERR_MAINTENANCE = 'MAINTENANCE'
+API_ERR_WAF = 'WAF_BLOCKED'
+
+def _classify_non_json_response(status, body):
+        """把非 JSON 响应（通常是 HTML）归类成可读错误信息。
+
+        95598 在「网站升级维护」期间会返回维护公告页；请求 /api/* 还可能被
+        阿里云 WAF 直接拦截（HTTP 405 / 403）。这两种情况都不是账号或密码问题，
+        需要明确提示，避免被误判成「账号或密码错误」。
+        """
+        txt=str(body or '')
+        if '维护' in txt or '升级' in txt or '暂停服务' in txt:
+                return ('['+API_ERR_MAINTENANCE+'] 国家电网95598网站正在升级维护，'
+                        '功能暂时无法使用，请稍后重试（或使用「网上国网」App）')
+        if ('您的访问被阻断' in txt or 'errors.aliyun.com' in txt
+                        or '<title>405' in txt or '<title>403' in txt
+                        or status in (403,405)):
+                # 95598 网站升级维护期间，/api/* 会被网关直接拒绝（HTTP 405），
+                # 因此这里既要提示维护，也要提示可能是风控拦截。
+                return (f'[{API_ERR_WAF}] 请求被拦截(HTTP {status})：'
+                        '可能是国家电网网站正在升级维护，或请求被风控拦截，'
+                        '请稍后重试或更换网络环境')
+        return f'接口返回了非 JSON 响应(HTTP {status}): {txt[:200]}'
+
 class StateGridDataClient:
         hass=_D;coordinator=_D;session=_D;dataVersion=_D;keyCode=_D;publicKey=_D;need_login=_N;phone=_D;codeKey=_D;serialNo=_D;qrCodeSerial=_D;userInfo=_D;accountInfo=_D;powerUserList=_D;doorAccountDict={};cookie=[];timestamp=int(time.time()*1000);accessToken=_D;refreshToken=_D;token=_D;expirationDate=_D;refresh_interval=12;is_debug=_N;shown_notification=_N
+
+        # ── 账号/票据类默认值 ──
+        # 原版只在 __init__(config) 里赋值，config 为空时访问 self.account / self.password
+        # 会抛 AttributeError（配置向导首次登录就是这种场景），这里补上类级默认值。
+        account=_D;password=_D;ticket='';authorizeCode=_D
 
         # ── 增强字段：LLM 配置 ──
         llm_api_key = ""
@@ -296,6 +326,9 @@ class StateGridDataClient:
         def encrypt_wapper_data(A,data):B=a(json_dumps(data),A.keyCode);return{_A:B+c(B+str(A.timestamp)),'skey':d(A.keyCode,A.publicKey),_s:str(A.timestamp)}
         def handle_request_result_message(E,api,result,printResult=_V):
                 D='message';C='resultMessage';A=result
+                # 防御：响应不是 dict（网关错误页/纯文本）时，直接转成字符串，
+                # 避免后续用字符串做字典索引崩溃（TypeError: string indices must be integers）
+                if not isinstance(A,dict):return str(A)[:500]
                 if E.is_debug and printResult:LOGGER.warning(api+'-'+json_dumps(A))
                 B=_D
                 if _A in A and A[_A]and _f in A[_A]and C in A[_A][_f]:B=A[_A][_f][C]
@@ -311,6 +344,10 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         async def __fetch_safe(A,api,data):
                 B=await A.__fetch(api,data)
+                if not isinstance(B,dict):
+                        # 防御：__fetch 理论上只会返回 dict，这里兜底避免字符串索引崩溃
+                        LOGGER.error("接口 %s 返回了非字典响应: %s",api,str(B)[:200])
+                        return{_I:'-1',_y:str(B)[:500],'message':str(B)[:500]}
                 if _I not in B:return B
                 code_val = B[_I]
 
@@ -403,7 +440,16 @@ class StateGridDataClient:
                 if D==get_request_key_api:C={J:appKey,Q:appSecret};H=a(json_dumps(C),G);C={_A:H+c(H+str(E)),'skey':d(G,'042D12DFBC179202AC4B7B7BADCDA6FF7B604339263F6AB732CE7107B7EA3830A2CA714DC303920D3CFF7647D898F1A8CC6C24E9EC3CC194E22D984AF7E16B42DC'),J:appKey,_s:str(E)}
                 elif D==get_request_authorize_api:
                         C={J:appKey,'response_type':_I,_Ap:'/test',_s:E,'rsi':A.token};C=urllib.parse.urlencode(C);F[O]='application/x-www-form-urlencoded; charset=UTF-8';F[_A9]=G;K=async_get_clientsession(A.hass,_N)
-                        async with K.post(baseApi+D,data=C,headers=F)as L:B=await L.json();B=b(B[_A],A.token);B=json.loads(B);return B
+                        if not A.token:
+                                LOGGER.error("获取授权码失败：token 为空，登录流程未完成")
+                                return{_I:'-1',_y:'token 为空，登录流程未完成','message':'token 为空，登录流程未完成'}
+                        async with K.post(baseApi+D,data=C,headers=F)as L:
+                                B=await L.json()
+                                if not isinstance(B,dict)or _A not in B:
+                                        LOGGER.error("获取授权码失败，响应异常: %s",str(B)[:200])
+                                        return{_I:'-1',_y:f'授权响应异常: {str(B)[:200]}','message':f'授权响应异常: {str(B)[:200]}'}
+                                B=b(B[_A],A.token);B=json.loads(B)
+                                return B
                 elif D==get_web_token_api:C={'grant_type':'authorization_code','sign':c(appKey+str(E)),Q:appSecret,'state':'464606a4-184c-4beb-b442-2ab7761d0796','key_code':G,J:appKey,_s:E,_I:C[_I]};H=a(json_dumps(C),G);C={_A:H+c(H+str(E)),'skey':d(G,A.publicKey),_s:str(E)}
                 else:C=A.encrypt_post_data(C)
                 if M is not _D:F.update(M)
@@ -419,8 +465,15 @@ class StateGridDataClient:
                                         B=await L.text()
                                         if B.startswith('{'):
                                                 B=json.loads(B)
-                                                if R in B:B=b(B[R],G);B=json.loads(B)
-                                        return B
+                                                if isinstance(B,dict) and R in B:B=json.loads(b(B[R],G))
+                                        if isinstance(B,dict):return B
+                                        # 非 JSON 响应（维护公告页 / WAF 拦截页 / 纯文本）统一包装成 dict：
+                                        # 上层大量使用 result['code'] 这样的字典索引，
+                                        # 直接返回字符串会导致
+                                        # TypeError: string indices must be integers, not 'str'
+                                        msg=_classify_non_json_response(L.status,B)
+                                        LOGGER.error("接口 %s 返回了非 JSON 响应(HTTP %s): %s",D,L.status,msg)
+                                        return{_I:'-1',_y:msg,'message':msg}
                         except Exception as N:
                                 LOGGER.error(f"请求错误: {N}. 尝试第 {I+1} 次重试...");I+=1
                                 if I==MAX_RETRIES:raise N
@@ -430,7 +483,13 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         async def __get_request_key(A):
                 A.keyCode=_D;B=await A.__fetch(get_request_key_api,{});C=A.handle_request_result_message('get_request_key_api',B)
-                if B[_I]==_F:A.keyCode=B[_A][_A9];A.publicKey=B[_A][_AR];return{_G:0}
+                if isinstance(B,dict) and str(B.get(_I,''))==_F:
+                        _d=B.get(_A)
+                        # data 必须是 dict：data 为字符串时 B['data']['keyCode'] 会抛
+                        # TypeError: string indices must be integers, not 'str'
+                        if isinstance(_d,dict) and _d.get(_A9)and _d.get(_AR):
+                                A.keyCode=_d[_A9];A.publicKey=_d[_AR];return{_G:0}
+                        LOGGER.error("获取请求密钥失败，响应结构异常: %s",str(B)[:200])
                 return{_G:1,_y:C}
 
         # ────────────────────────────────────────────
@@ -438,7 +497,7 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         async def __get_pass_verify_code(B,account,password):
                 C={_j:account,_AF:password,'canvasHeight':200,'canvasWidth':310};A=await B.__fetch(get_verify_code_api,C);D=B.handle_request_result_message('get_verify_code_api',A,_N)
-                if _I in A and str(A[_I])=='1' and _A in A:
+                if isinstance(A,dict) and str(A.get(_I,''))=='1' and isinstance(A.get(_A),dict):
                         data = A[_A]
                         B.ticket=data.get('ticket','')
                         # 检测验证码类型
@@ -458,8 +517,13 @@ class StateGridDataClient:
                 elif captcha_type=='slider':
                         C['complexSliderRet']=0;C['complexSliderType']='blockPuzzle'
                 A=await B.__fetch(verify_password_api,C);D=B.handle_request_result_message('verify_password_api',A)
-                if A[_I]==1:
-                        if A[_A]and A[_A][_f]and A[_A][_f]['resultCode']=='0000':B.token=A[_A][_AG][_AA];B.userInfo=A[_A][_AG][_AS][0];return{_G:0}
+                if isinstance(A,dict) and str(A.get(_I,''))=='1':
+                        _d=A.get(_A)if isinstance(A.get(_A),dict)else{}
+                        _r=_d.get(_f)if isinstance(_d.get(_f),dict)else{}
+                        if _r.get('resultCode')=='0000':
+                                _b=_d.get(_AG)if isinstance(_d.get(_AG),dict)else{}
+                                _tk=_b.get(_AA);_ul=_b.get(_AS)or[]
+                                if _tk and _ul:B.token=_tk;B.userInfo=_ul[0];return{_G:0}
                 return{_G:1,_y:D}
 
         # ────────────────────────────────────────────
@@ -469,8 +533,13 @@ class StateGridDataClient:
                 C={'loginKey':loginKey,_I:code,'params':{_Q:{_m:'',_o:_AN,_l:_M,_n:''},_AX:{'optSys':'android','pushId':'000000','addressProvince':'110100',_AF:password,'addressRegion':'110101',_j:account,'addressCity':'330100'}},'Channels':'web'}
                 LOGGER.info(f"提交点选验证码(f07/clickCard): code={code}")
                 A=await B.__fetch(click_card_api,C);D=B.handle_request_result_message('click_card_api',A)
-                if _I in A and str(A[_I])=='1':
-                        if A[_A]and A[_A].get(_f)and A[_A][_f].get('resultCode')=='0000':B.token=A[_A][_AG][_AA];B.userInfo=A[_A][_AG][_AS][0];return{_G:0}
+                if isinstance(A,dict) and str(A.get(_I,''))=='1':
+                        _d=A.get(_A)if isinstance(A.get(_A),dict)else{}
+                        _r=_d.get(_f)if isinstance(_d.get(_f),dict)else{}
+                        if _r.get('resultCode')=='0000':
+                                _b=_d.get(_AG)if isinstance(_d.get(_AG),dict)else{}
+                                _tk=_b.get(_AA);_ul=_b.get(_AS)or[]
+                                if _tk and _ul:B.token=_tk;B.userInfo=_ul[0];return{_G:0}
                 LOGGER.warning(f"clickCard(f07) 验证失败: {D}，尝试回退到 f06...")
                 return{_G:1,_y:D}
 
@@ -479,7 +548,10 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         async def __get_request_authorize(B):
                 A=await B.__fetch(get_request_authorize_api,{});E=B.handle_request_result_message('get_request_authorize_api',A)
-                if _I in A and A[_I]==_F:C=A[_A][_Ap];D=C.rfind('code=');B.authorizeCode=C[D+5:D+5+32];return{_G:0}
+                if isinstance(A,dict) and str(A.get(_I,''))==_F:
+                        _d=A.get(_A)if isinstance(A.get(_A),dict)else{}
+                        C=_d.get(_Ap)
+                        if C:D=C.rfind('code=');B.authorizeCode=C[D+5:D+5+32];return{_G:0}
                 return{_G:1,_y:E}
 
         # ────────────────────────────────────────────
@@ -487,7 +559,9 @@ class StateGridDataClient:
         # ────────────────────────────────────────────
         async def __get_web_token(A):
                 C={_I:A.authorizeCode};B=await A.__fetch(get_web_token_api,C);D=A.handle_request_result_message('get_web_token_api',B)
-                if _I in B and B[_I]==_F:A.accessToken=B[_A]['access_token'];A.refreshToken=B[_A]['refresh_token'];return{_G:0}
+                if isinstance(B,dict) and str(B.get(_I,''))==_F:
+                        _d=B.get(_A)if isinstance(B.get(_A),dict)else{}
+                        if _d.get('access_token'):A.accessToken=_d['access_token'];A.refreshToken=_d.get('refresh_token');return{_G:0}
                 return{_G:1,_y:D}
 
         # ────────────────────────────────────────────
@@ -561,6 +635,7 @@ class StateGridDataClient:
         @staticmethod
         def _is_rk001_error(result):
                 """检查结果是否为 RK001 流控错误（只检查 code 字段，避免误判）"""
+                if not isinstance(result,dict):return False
                 code = result.get('code') or result.get('raw_code') or result.get(_G)
                 if code is not None:
                         try:
