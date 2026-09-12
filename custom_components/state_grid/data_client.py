@@ -341,10 +341,8 @@ class StateGridDataClient:
                                 A.email_account=_dec_field(B.get('email_account',''),A.crypto_key)
                                 if A.refresh_interval<12:A.refresh_interval=12
                                 # 增强字段
-                                A.llm_api_key=B.get('llm_api_key','')
                                 A.llm_base_url=B.get('llm_base_url','https://ark.cn-beijing.volces.com/api/v3')
                                 A.llm_model=B.get('llm_model','')
-                                A.email_account=B.get('email_account','')
                                 A._rk001_cooldown_until=B.get('_rk001_cooldown_until',0.0)
                                 A._login_fail_cooldown_until=B.get('_login_fail_cooldown_until',0.0)
                                 A.last_status=B.get('_last_status',{"state":STATE_UNKNOWN,"message":"","ts":0.0})
