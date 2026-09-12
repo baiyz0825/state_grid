@@ -236,6 +236,28 @@ def find_max_rectangle(matrix):
 API_ERR_MAINTENANCE = 'MAINTENANCE'
 API_ERR_WAF = 'WAF_BLOCKED'
 
+# ─── 集成状态机（向 HA 暴露网站维护/风控/登录失败等状态） ───
+STATE_OK = "ok"
+STATE_MAINTENANCE = "maintenance"
+STATE_WAF = "waf_blocked"
+STATE_LOGIN_FAILED = "login_failed"
+STATE_NEED_CONFIG = "need_config"
+STATE_UNKNOWN = "unknown"
+
+# 维护/风控期间，智能更新把轮询间隔拉长到该秒数（仅做轻量探测，不触发登录）
+MAINTENANCE_PROBE_INTERVAL = 900
+
+
+def _state_from_message(msg):
+    """把错误信息归类成状态机状态（供状态传感器与智能更新识别）。"""
+    m = str(msg or "")
+    if m.startswith("[" + API_ERR_MAINTENANCE + "]"):
+        return {"state": STATE_MAINTENANCE, "message": m, "ts": time.time()}
+    if m.startswith("[" + API_ERR_WAF + "]"):
+        return {"state": STATE_WAF, "message": m, "ts": time.time()}
+    return {"state": STATE_LOGIN_FAILED, "message": m, "ts": time.time()}
+
+
 def _classify_non_json_response(status, body):
         """把非 JSON 响应（通常是 HTML）归类成可读错误信息。
 
@@ -259,6 +281,9 @@ def _classify_non_json_response(status, body):
 
 class StateGridDataClient:
         hass=_D;coordinator=_D;session=_D;dataVersion=_D;keyCode=_D;publicKey=_D;need_login=_N;phone=_D;codeKey=_D;serialNo=_D;qrCodeSerial=_D;userInfo=_D;accountInfo=_D;powerUserList=_D;doorAccountDict={};cookie=[];timestamp=int(time.time()*1000);accessToken=_D;refreshToken=_D;token=_D;expirationDate=_D;refresh_interval=12;is_debug=_N;shown_notification=_N
+
+        # ── 增强字段：集成状态机（维护/风控/登录失败等，向 HA 暴露） ──
+        last_status={"state":STATE_UNKNOWN,"message":"","ts":0.0}
 
         # ── 账号/票据类默认值 ──
         # 原版只在 __init__(config) 里赋值，config 为空时访问 self.account / self.password
@@ -295,6 +320,7 @@ class StateGridDataClient:
                                 A.email_account=B.get('email_account','')
                                 A._rk001_cooldown_until=B.get('_rk001_cooldown_until',0.0)
                                 A._login_fail_cooldown_until=B.get('_login_fail_cooldown_until',0.0)
+                                A.last_status=B.get('_last_status',{"state":STATE_UNKNOWN,"message":"","ts":0.0})
                                 # 加载 timestamp，使重启后 12 小时间隔判断仍然正确
                                 # 若旧版存储中没有该字段，则保留类默认值（当前时间）
                                 _saved_ts=B.get(_s)
@@ -312,8 +338,9 @@ class StateGridDataClient:
                 A={};A[_A9]=B.keyCode;A[_AR]=B.publicKey;A[_Ak]=B.accessToken;A[_Al]=B.refreshToken;A[_AA]=B.token;A[_AS]=B.userInfo;A[_AT]=B.powerUserList;A[_Am]=B.doorAccountDict;A['is_debug']=B.is_debug;A[_An]=VERSION;A[_j]=B.account;A[_AF]=B.password;A[_Ao]=B.refresh_interval
                 # 增强字段
                 A['llm_api_key']=B.llm_api_key;A['llm_base_url']=B.llm_base_url;A['llm_model']=B.llm_model
-                A['email_account']=B.email_account;A['_rk001_cooldown_until']=B._rk001_cooldown_until
+                A['email_account']=B.email_account;                A['_rk001_cooldown_until']=B._rk001_cooldown_until
                 A['_login_fail_cooldown_until']=B._login_fail_cooldown_until
+                A['_last_status']=B.last_status
                 # 保存 timestamp，使重启后 12 小时间隔判断仍然正确
                 A[_s]=B.timestamp
                 await async_save_to_store(B.hass,'state_grid.config',A)
@@ -347,7 +374,9 @@ class StateGridDataClient:
                 if not isinstance(B,dict):
                         # 防御：__fetch 理论上只会返回 dict，这里兜底避免字符串索引崩溃
                         LOGGER.error("接口 %s 返回了非字典响应: %s",api,str(B)[:200])
+                        A._maybe_record_status({_y:str(B)[:500]})
                         return{_I:'-1',_y:str(B)[:500],'message':str(B)[:500]}
+                A._maybe_record_status(B)
                 if _I not in B:return B
                 code_val = B[_I]
 
@@ -413,6 +442,7 @@ class StateGridDataClient:
                         # 登录成功：清除所有失败冷却
                         A.need_login=_N;A.shown_notification=_N
                         A._login_fail_cooldown_until=0.0
+                        A._record_status(STATE_OK, "登录成功")
                         await A.save_data();return
 
                 # 密码登录失败，如果是RK001则尝试邮箱降级
@@ -422,13 +452,16 @@ class StateGridDataClient:
                         if login_ok:return
                         A._set_rk001_cooldown()
                         A.need_login=_V
-                        return
+                        A._record_status(STATE_LOGIN_FAILED, B.get(_y,"RK001流控"))
+                        await A.save_data();return
 
                 # 非 RK001 失败：设置 5 分钟登录失败冷却 + 显式标记 need_login
                 # 防止 refresh_data 内多个 __fetch_safe 串联反复触发重登 → LLM 大量消耗
                 LOGGER.warning("[登录失败] 密码登录未通过(errcode=%s)，进入 5 分钟冷却", B.get(_G))
                 A.need_login=_V
+                A._record_status(STATE_LOGIN_FAILED, B.get(_y,"登录失败"))
                 A._set_login_fail_cooldown(300)
+                await A.save_data()
 
         # ────────────────────────────────────────────
         # __fetch: bilezhou 原版（不变）
@@ -685,6 +718,41 @@ class StateGridDataClient:
                 )
 
         # ────────────────────────────────────────────
+        # 集成状态机：记录与探测
+        # ────────────────────────────────────────────
+
+        def _record_status(B, state, message="", ts=None):
+                """更新集成状态（供状态传感器与智能更新识别）。"""
+                B.last_status = {
+                        "state": state,
+                        "message": str(message or ""),
+                        "ts": ts if ts is not None else time.time(),
+                }
+
+        def _maybe_record_status(B, result):
+                """若接口响应携带维护/风控信息，则更新状态机（已登录会话的数据接口也会命中）。"""
+                if not isinstance(result, dict):
+                        return
+                msg = result.get(_y) or result.get('message') or ''
+                if '[MAINTENANCE]' in msg or '[WAF_BLOCKED]' in msg:
+                        B.last_status = _state_from_message(msg)
+
+        async def _probe_site_state(B):
+                """轻量探测网站状态：仅请求 get_request_key（无需登录/验证码/LLM）。
+
+                用于维护/风控期间识别网站是否恢复，避免维护期反复触发登录，
+                浪费 RK001 日额度与 LLM 调用。
+                """
+                try:
+                        C = await B.__fetch(get_request_key_api, {})
+                        if isinstance(C, dict) and str(C.get(_I, '')) == _F:
+                                return {"state": STATE_OK, "message": "网站正常", "ts": time.time()}
+                        msg = C.get(_y) or C.get('message') or json_dumps(C)[:200]
+                        return _state_from_message(msg)
+                except Exception as ex:
+                        return {"state": STATE_UNKNOWN, "message": f"探测异常: {ex}", "ts": time.time()}
+
+        # ────────────────────────────────────────────
         # password_login: 增强版（LLM验证码 + RK001冷却）
         # ────────────────────────────────────────────
         async def password_login(B,account,password,encode=_N,retry=0):
@@ -696,7 +764,9 @@ class StateGridDataClient:
                 E=account;C=password
                 if encode==_N:C=hashlib.md5(C.encode()).hexdigest().upper()
                 M=_D;A=await B.__get_request_key()
-                if _G in A and A[_G]!=0:return A
+                if _G in A and A[_G]!=0:
+                        B._record_status(STATE_LOGIN_FAILED, A.get(_y,"获取请求密钥失败"))
+                        return A
                 A=await B.__get_pass_verify_code(E,C)
                 if _G in A and A[_G]!=0:return A
 
@@ -802,7 +872,7 @@ class StateGridDataClient:
                 if _G in A and A[_G]!=0:return A
                 A=await B.__get_web_token()
                 if _G in A and A[_G]!=0:return A
-                B.need_login=_N;await B.save_data();return{_G:0}
+                B.need_login=_N;B._record_status(STATE_OK,"已授权");await B.save_data();return{_G:0}
 
         # ────────────────────────────────────────────
         # _show_token_notification: 增强版（支持自定义消息）
@@ -877,6 +947,24 @@ class StateGridDataClient:
                 # 如果本次刷新中途失败（登录失败/异常），还原 timestamp 避免下次 12 小时判断错误
                 _orig_ts=C.timestamp
                 try:
+                        # ── 维护/风控识别：智能更新在维护期不触发登录 ──
+                        # 若已知状态为「维护中/被拦截」，先做一次轻量探测
+                        # （仅请求 get_request_key，无需登录/验证码/LLM）：
+                        #   - 仍在维护 → 跳过本次刷新，保留上次数据，并拉长轮询间隔；
+                        #   - 已恢复   → 清除状态，继续正常刷新。
+                        st = C.last_status
+                        if st and st.get('state') in (STATE_MAINTENANCE, STATE_WAF):
+                                probe = await C._probe_site_state()
+                                C.last_status = probe
+                                if probe['state'] in (STATE_MAINTENANCE, STATE_WAF):
+                                        LOGGER.warning(
+                                                "[维护识别] 国家电网网站%s，跳过本次刷新（仅做轻量探测），保留上次数据",
+                                                "维护中" if probe['state'] == STATE_MAINTENANCE else "被拦截",
+                                        )
+                                        await C.save_data()  # 持久化维护状态，避免重启后立刻重试登录
+                                        return
+                                LOGGER.info("[维护识别] 国家电网网站已恢复，重新执行正常刷新")
+
                         if f:await C.__get_door_number()
                         A6=f or int(time.time()*1000)-C.timestamp>C.refresh_interval*3600*1000
                         if A6 is _N:return

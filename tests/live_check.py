@@ -131,9 +131,10 @@ async def run(args) -> int:
     if args.llm_api_key:
         solver.configure_llm(args.llm_api_key, args.llm_base_url, args.llm_model)
 
-    print(f"[1/3] 开始登录: {args.phone} (LLM={args.llm_model} @ {args.llm_base_url})")
+    print(f"[1/4] 开始登录: {args.phone} (LLM={args.llm_model} @ {args.llm_base_url})")
     result = await client.password_login(args.phone, args.password, encode=False, retry=args.retry)
-    print(f"[2/3] 登录结果: {result}")
+    print(f"[2/4] 登录结果: {result}")
+    print(f"[状态机] last_status = {client.last_status}")
     if not isinstance(result, dict) or result.get("errcode") != 0:
         errmsg = result.get("errmsg", "") if isinstance(result, dict) else str(result)
         print("[诊断] 登录失败:", errmsg)
@@ -142,10 +143,23 @@ async def run(args) -> int:
         elif "WAF_BLOCKED" in errmsg or "风控" in errmsg:
             print("       原因: /api/* 被网关拦截（HTTP 405），")
             print("             95598 网站升级维护期间会直接拒绝 API 请求，与账号/密码无关。")
+
+        # 演示：智能更新的「轻量探测」——仅请求 get_request_key，不触发登录/验证码/LLM
+        print("[3/4] 触发轻量探测 _probe_site_state()（不触发登录，不消耗 LLM）...")
+        probe = await client._probe_site_state()
+        print(f"      探测结果: {probe}")
+
+        # 演示：智能更新在维护期识别状态并跳过登录，仅保留上次数据
+        print("[4/4] 模拟「自动智能更新」识别维护：refresh_data 应只探测并跳过登录...")
+        client.last_status = probe
+        await client.refresh_data(force_refresh=True)
+        print(f"      维护识别后 last_status = {client.last_status}")
+        print("      => coordinator 会把轮询间隔从 5 分钟拉长到 15 分钟")
         return 1
 
-    print("[3/3] 拉取用电数据 ...")
+    print("[3/4] 拉取用电数据 ...")
     await client.refresh_data(force_refresh=True)
+    print(f"[状态机] 刷新后 last_status = {client.last_status}")
 
     accounts = client.get_door_account_list()
     if not accounts:

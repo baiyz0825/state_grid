@@ -12,7 +12,32 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import datetime
 from .const import DOMAIN, VERSION
 from .data_client import StateGridDataClient
+from .data_client import (
+    STATE_OK,
+    STATE_MAINTENANCE,
+    STATE_WAF,
+    STATE_LOGIN_FAILED,
+    STATE_NEED_CONFIG,
+    STATE_UNKNOWN,
+)
 from .coordinator import StateGridCoordinator
+
+# 状态传感器：把集成状态机映射成中文展示
+STATUS_FRIENDLY = {
+    STATE_OK: "正常",
+    STATE_MAINTENANCE: "维护中",
+    STATE_WAF: "被拦截",
+    STATE_LOGIN_FAILED: "登录失败",
+    STATE_NEED_CONFIG: "未配置",
+    STATE_UNKNOWN: "未知",
+}
+STATUS_ICON = {
+    STATE_OK: "mdi:check-circle",
+    STATE_MAINTENANCE: "mdi:wrench",
+    STATE_WAF: "mdi:shield-off",
+    STATE_LOGIN_FAILED: "mdi:alert-circle",
+}
+STATUS_DEVICE_CLASS = None  # 文本类状态，无设备类
 
 UNIT_YUAN = "元"
 ENTITY_ID_SENSOR_FORMAT = SENSOR_DOMAIN + ".state_grid_"
@@ -183,7 +208,7 @@ async def async_setup_entry(
     data_client.coordinator = coordinator
     await coordinator.async_config_entry_first_refresh()
     door_account_list = data_client.get_door_account_list()
-    entities: list[StateGridSensor] = []
+    entities: list = []
     for door_account in door_account_list:
         for sensor_type in SENSOR_TYPES:
             entities.append(
@@ -191,6 +216,8 @@ async def async_setup_entry(
                     door_account, sensor_type, entry.entry_id, coordinator
                 )
             )
+    # 集成状态总览传感器（维护/风控/登录失败等），全局一个，不绑定具体户号
+    entities.append(StateGridStatusSensor(entry.entry_id, coordinator))
     async_add_entities(entities)
 
 
@@ -254,3 +281,43 @@ class StateGridSensor(CoordinatorEntity[StateGridCoordinator], SensorEntity):
         elif key == "recent_12_monthly_ele_list":
             return {"graph": data.get("recent_12_monthly_ele_list", [])}
         return {}
+
+
+class StateGridStatusSensor(CoordinatorEntity, SensorEntity):
+    """集成状态总览传感器：暴露网站维护/风控/登录失败等状态。"""
+
+    _attr_has_entity_name = True
+    _unrecorded_attributes = frozenset({"message", "code", "updated_at"})
+
+    def __init__(self, entry_id: str, coordinator: StateGridCoordinator) -> None:
+        super().__init__(coordinator)
+        self.entity_id = SENSOR_DOMAIN + ".state_grid_status"
+        self._attr_name = "集成状态"
+        self._attr_unique_id = entry_id + "-status"
+        self._attr_device_info = {
+            "name": "国家电网",
+            "identifiers": {(DOMAIN, "root")},
+            "manufacturer": "国家电网",
+            "model": "状态总览",
+            "sw_version": VERSION,
+        }
+
+    @property
+    def native_value(self):
+        """中文状态展示。"""
+        st = self.coordinator.data_client.last_status
+        return STATUS_FRIENDLY.get(st.get("state", STATE_UNKNOWN), "未知")
+
+    @property
+    def extra_state_attributes(self):
+        st = self.coordinator.data_client.last_status
+        return {
+            "code": st.get("state", STATE_UNKNOWN),
+            "message": st.get("message", ""),
+            "updated_at": st.get("ts", 0),
+        }
+
+    @property
+    def icon(self):
+        code = self.coordinator.data_client.last_status.get("state")
+        return STATUS_ICON.get(code, "mdi:help-circle")
